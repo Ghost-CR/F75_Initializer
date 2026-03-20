@@ -94,6 +94,10 @@ That state is tied to the current boot, so a system reboot will cause the timer
 setup to do one real sync again instead of assuming the device was already
 initialized in a previous session.
 
+The first automatic poll is intentionally delayed for 45 seconds after boot.
+This avoids an early "successful" sync attempt while the keyboard or dongle is
+still enumerating or not fully ready yet.
+
 Before installing, replace the example repository path with the actual location
 of your checkout on your machine.
 

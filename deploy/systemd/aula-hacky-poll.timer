@@ -2,10 +2,9 @@
 Description=Poll for AULA keyboard presence every 5 seconds
 
 [Timer]
-OnBootSec=10
+OnBootSec=45
 OnUnitActiveSec=5
 AccuracySec=1s
-Persistent=true
 Unit=aula-hacky-poll.service
 
 [Install]
