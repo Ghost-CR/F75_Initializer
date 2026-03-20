@@ -1,0 +1,6 @@
+[Unit]
+Description=Poll and sync AULA keyboard RTC
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/aula-hacky-poll.sh

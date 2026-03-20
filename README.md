@@ -31,7 +31,9 @@ as the keyboard exposes its vendor HID interface through `/dev/hidraw*`.
 - `aula_hacky/protocol.py`: packet builders, checksum, validators
 - `aula_hacky/hidraw_linux.py`: hidraw enumeration and I/O helpers
 - `aula_hacky/decode_capture.py`: tshark-based decoder for packet captures
+- `aula_hacky/timer_sync.py`: timer-friendly sync entrypoint that exits quietly when no device is present
 - `tests/test_protocol.py`: protocol tests from the observed capture
+- `deploy/systemd/`: `systemd` service, timer, and wrapper script for periodic polling
 
 ## Usage
 
@@ -73,6 +75,84 @@ Run the test suite:
 
 ```bash
 uv run python -m unittest discover -s tests -v
+```
+
+## Timer Automation
+
+The repository includes a polling-based `systemd` setup that checks every 5
+seconds whether the supported cable or dongle interface is present, and then
+runs the RTC sync. This avoids the limitation of pure hotplug automation when
+the 2.4 GHz dongle stays plugged in and only the keyboard itself powers on
+later.
+
+The timer does not perform a full RTC write on every tick. After a successful
+sync it records state in `/tmp/aula-hacky-poll-state.json` and then only does a
+lightweight liveness probe every 30 seconds by default. If that probe starts
+failing, the next timer run will do a full sync again.
+
+Before installing, replace the example repository path with the actual location
+of your checkout on your machine.
+
+Example:
+
+- if your checkout is `/home/alice/src/aula-hacky`
+- then replace `/home/simon/source/aula-hacky` with `/home/alice/src/aula-hacky`
+
+Install it like this:
+
+```bash
+repo_root=/absolute/path/to/your/aula-hacky
+cd "$repo_root"
+sed "s#__AULA_HACKY_REPO_ROOT__#$repo_root#g" deploy/systemd/aula-hacky-poll.sh | sudo tee /usr/local/bin/aula-hacky-poll.sh >/dev/null
+sudo chmod 0755 /usr/local/bin/aula-hacky-poll.sh
+sudo install -m 0644 deploy/systemd/aula-hacky-poll.service /etc/systemd/system/aula-hacky-poll.service
+sudo install -m 0644 deploy/systemd/aula-hacky-poll.timer /etc/systemd/system/aula-hacky-poll.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now aula-hacky-poll.timer
+```
+
+What those steps do:
+
+- rewrite the wrapper script so it knows where your checkout lives
+- install the wrapper script to `/usr/local/bin`
+- install a oneshot `systemd` service that runs the poll script
+- install a `systemd` timer that starts that service every 5 seconds
+- enable and start the timer immediately
+
+The polling setup does not depend on a fixed `/dev/hidrawN` path. Each run uses
+the Python CLI's normal autodiscovery and prefers:
+
+- cable `0c45:800a`, interface `3`
+- dongle `05ac:024f`, interface `3`
+
+The wrapper script runs:
+
+```bash
+python -m aula_hacky.timer_sync --time now --quiet
+```
+
+It prefers the project's `.venv/bin/python` and falls back to `uv run python`.
+Logs from timer executions go to `/tmp/aula-hacky-poll.log`.
+
+State is stored in:
+
+```bash
+/tmp/aula-hacky-poll-state.json
+```
+
+To test the service manually without waiting for the timer:
+
+```bash
+sudo systemctl start aula-hacky-poll.service
+sudo systemctl status aula-hacky-poll.service
+cat /tmp/aula-hacky-poll.log
+```
+
+To inspect the timer:
+
+```bash
+systemctl status aula-hacky-poll.timer
+systemctl list-timers aula-hacky-poll.timer
 ```
 
 ## Device Selection
