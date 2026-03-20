@@ -9,6 +9,8 @@ from aula_hacky.protocol import (
     CABLE_SESSION_FINALIZE_OUT,
     CABLE_SESSION_INIT_IN,
     CABLE_SESSION_INIT_OUT,
+    CABLE_SESSION_PREPARE_IN,
+    CABLE_SESSION_PREPARE_OUT,
     PACKET_SIZE,
     RTC_SET_ACK,
     SESSION_INIT_IN,
@@ -93,12 +95,17 @@ class ProtocolTests(TestCase):
         txs = build_cable_transaction_sequence(datetime(2026, 3, 20, 11, 10, 18))
         self.assertEqual(
             [tx.name for tx in txs],
-            ["cable-session-init", "cable-rtc-set", "cable-session-finalize"],
+            ["cable-session-init", "cable-session-prepare", "cable-rtc-set", "cable-session-finalize"],
         )
         self.assertTrue(
             is_valid_cable_reply(CABLE_SESSION_INIT_IN, txs[0].expected_reply_prefix, txs[0].expected_reply)
         )
-        self.assertTrue(is_valid_cable_reply(CABLE_RTC_SET_IN_EXAMPLE, txs[1].expected_reply_prefix))
         self.assertTrue(
-            is_valid_cable_reply(CABLE_SESSION_FINALIZE_IN, txs[2].expected_reply_prefix, txs[2].expected_reply)
+            is_valid_cable_reply(
+                CABLE_SESSION_PREPARE_IN, txs[1].expected_reply_prefix, txs[1].expected_reply
+            )
+        )
+        self.assertTrue(is_valid_cable_reply(CABLE_RTC_SET_IN_EXAMPLE, txs[2].expected_reply_prefix))
+        self.assertTrue(
+            is_valid_cable_reply(CABLE_SESSION_FINALIZE_IN, txs[3].expected_reply_prefix, txs[3].expected_reply)
         )

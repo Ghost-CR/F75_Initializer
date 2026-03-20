@@ -1,7 +1,6 @@
 # aula-hacky
 
-Linux-first tooling for the proprietary HID channel observed on the keyboard in
-`keyboard5.pcapng` and `keyboard6.pcapng`.
+Tooling for the proprietary HID channel protocol of the AULA F75 MAX keyboard, so we can initialize it with the right date and time from linux; this is neccessary for the screen to stop showing the AULA logo and animation and instead enter "normal" mode.
 
 This implements two RTC setter paths:
 

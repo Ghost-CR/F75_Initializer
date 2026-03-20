@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from datetime import datetime
 
 from .hidraw_linux import HidrawTransport, enumerate_hidraw, find_matching_device
@@ -112,6 +113,8 @@ def _run_cable_flow(transport: HidrawTransport, transactions, debug: bool) -> No
         echoed = transport.set_feature(feature_request)
         if debug:
             print(f"{tx.name}: set_feature_echo={echoed.hex()}")
+        if tx.read_delay_seconds:
+            time.sleep(tx.read_delay_seconds)
         raw_reply = transport.get_feature(0, CABLE_PACKET_SIZE + 1)
         reply = raw_reply[1:] if len(raw_reply) == CABLE_PACKET_SIZE + 1 and raw_reply[0] == 0 else raw_reply
         if debug:
@@ -120,6 +123,8 @@ def _run_cable_flow(transport: HidrawTransport, transactions, debug: bool) -> No
         if not is_valid_cable_reply(reply, tx.expected_reply_prefix, exact=tx.expected_reply):
             raise RuntimeError(f"{tx.name}: unexpected feature reply {reply.hex()}")
         print(f"{tx.name}: in={reply.hex()}")
+        if tx.post_delay_seconds:
+            time.sleep(tx.post_delay_seconds)
 
 
 def _pick_default_device():

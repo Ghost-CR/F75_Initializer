@@ -27,6 +27,12 @@ CABLE_SESSION_INIT_OUT = bytes.fromhex(
 CABLE_SESSION_INIT_IN = bytes.fromhex(
     "04180001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 )
+CABLE_SESSION_PREPARE_OUT = bytes.fromhex(
+    "04280000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+)
+CABLE_SESSION_PREPARE_IN = bytes.fromhex(
+    "04280001000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+)
 CABLE_RTC_SET_IN_EXAMPLE = bytes.fromhex(
     "00015a1a03140b0a120005000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aa55"
 )
@@ -44,6 +50,8 @@ class Transaction:
     outgoing: bytes
     expected_reply_prefix: bytes
     expected_reply: bytes | None = None
+    read_delay_seconds: float = 0.0
+    post_delay_seconds: float = 0.0
 
 
 def checksum(payload: bytes) -> int:
@@ -227,19 +235,32 @@ def build_cable_transaction_sequence(when: datetime) -> list[Transaction]:
             name="cable-session-init",
             outgoing=CABLE_SESSION_INIT_OUT,
             expected_reply_prefix=bytes([0x04, 0x18]),
-            expected_reply=None,
+            expected_reply=CABLE_SESSION_INIT_IN,
+            read_delay_seconds=0.036,
+            post_delay_seconds=0.036,
+        ),
+        Transaction(
+            name="cable-session-prepare",
+            outgoing=CABLE_SESSION_PREPARE_OUT,
+            expected_reply_prefix=bytes([0x04, 0x28]),
+            expected_reply=CABLE_SESSION_PREPARE_IN,
+            read_delay_seconds=0.036,
+            post_delay_seconds=0.036,
         ),
         Transaction(
             name="cable-rtc-set",
             outgoing=build_cable_rtc_set_packet(when),
             expected_reply_prefix=bytes([0x00, 0x01, 0x5A]),
-            expected_reply=None,
+            expected_reply=build_cable_rtc_set_packet(when),
+            read_delay_seconds=0.036,
+            post_delay_seconds=0.036,
         ),
         Transaction(
             name="cable-session-finalize",
             outgoing=CABLE_SESSION_FINALIZE_OUT,
             expected_reply_prefix=bytes([0x04, 0x02]),
-            expected_reply=None,
+            expected_reply=CABLE_SESSION_FINALIZE_IN,
+            read_delay_seconds=0.036,
         ),
     ]
 
