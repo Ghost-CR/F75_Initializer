@@ -27,8 +27,15 @@ from .protocol import (
     parse_time_argument,
 )
 
-DEFAULT_STATE_FILE = Path("/tmp/aula-hacky-poll-state.json")
+DEFAULT_STATE_FILE = Path("/run/aula-hacky-poll-state.json")
 DEFAULT_PROBE_INTERVAL_SECONDS = 30.0
+
+
+def _boot_id() -> str:
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _pick_default_device():
@@ -186,6 +193,8 @@ def main() -> int:
         return 0
 
     state = _load_state(state_path)
+    if state.get("boot_id") != _boot_id():
+        state = {}
     current_key = _device_key(selected)
     state_key = state.get("device_key")
     synced = state.get("synced") is True and state_key == current_key
@@ -211,6 +220,7 @@ def main() -> int:
     _save_state(
         state_path,
         {
+            "boot_id": _boot_id(),
             "device_key": current_key,
             "synced": True,
             "last_probe_at": now,

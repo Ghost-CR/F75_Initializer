@@ -86,9 +86,13 @@ the 2.4 GHz dongle stays plugged in and only the keyboard itself powers on
 later.
 
 The timer does not perform a full RTC write on every tick. After a successful
-sync it records state in `/tmp/aula-hacky-poll-state.json` and then only does a
+sync it records state in `/run/aula-hacky-poll-state.json` and then only does a
 lightweight liveness probe every 30 seconds by default. If that probe starts
 failing, the next timer run will do a full sync again.
+
+That state is tied to the current boot, so a system reboot will cause the timer
+setup to do one real sync again instead of assuming the device was already
+initialized in a previous session.
 
 Before installing, replace the example repository path with the actual location
 of your checkout on your machine.
@@ -137,7 +141,7 @@ Logs from timer executions go to `/tmp/aula-hacky-poll.log`.
 State is stored in:
 
 ```bash
-/tmp/aula-hacky-poll-state.json
+/run/aula-hacky-poll-state.json
 ```
 
 To test the service manually without waiting for the timer:
