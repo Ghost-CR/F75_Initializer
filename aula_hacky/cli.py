@@ -5,16 +5,24 @@ from datetime import datetime
 
 from .hidraw_linux import HidrawTransport, enumerate_hidraw, find_matching_device
 from .protocol import (
+    CABLE_PACKET_SIZE,
     PACKET_SIZE,
+    build_cable_transaction_sequence,
     build_transaction_sequence,
+    is_valid_cable_reply,
     is_valid_reply,
     iter_candidate_packets,
     parse_time_argument,
 )
 
-DEFAULT_VID = 0x05AC
-DEFAULT_PID = 0x024F
+DEFAULT_VID = 0x0C45
+DEFAULT_PID = 0x800A
 DEFAULT_INTERFACE = 3
+
+CABLE_VID = 0x0C45
+CABLE_PID = 0x800A
+DONGLE_VID = 0x05AC
+DONGLE_PID = 0x024F
 
 
 def _format_device_line(device) -> str:
@@ -82,6 +90,51 @@ def _wait_for_matching_reply(transport: HidrawTransport, tx, debug: bool) -> byt
             skipped.append(raw_report)
 
 
+def _run_dongle_flow(transport: HidrawTransport, transactions, report_size: int, debug: bool) -> None:
+    drained = transport.drain_pending_reports()
+    if debug and drained:
+        for report in drained:
+            print(f"drained: {report.hex()}")
+    for tx in transactions:
+        outgoing = tx.outgoing.ljust(report_size, b"\x00")
+        if len(outgoing) != report_size:
+            raise RuntimeError(f"{tx.name}: report size {report_size} is smaller than packet size")
+        written = transport.write(outgoing)
+        if written != report_size:
+            raise RuntimeError(f"{tx.name}: short write, wrote {written} bytes")
+        reply = _wait_for_matching_reply(transport, tx, debug)
+        print(f"{tx.name}: in={reply.hex()}")
+
+
+def _run_cable_flow(transport: HidrawTransport, transactions, debug: bool) -> None:
+    for tx in transactions:
+        feature_request = b"\x00" + tx.outgoing
+        echoed = transport.set_feature(feature_request)
+        if debug:
+            print(f"{tx.name}: set_feature_echo={echoed.hex()}")
+        raw_reply = transport.get_feature(0, CABLE_PACKET_SIZE + 1)
+        reply = raw_reply[1:] if len(raw_reply) == CABLE_PACKET_SIZE + 1 and raw_reply[0] == 0 else raw_reply
+        if debug:
+            print(f"{tx.name}: get_feature_raw={raw_reply.hex()}")
+            print(f"{tx.name}: get_feature={reply.hex()}")
+        if not is_valid_cable_reply(reply, tx.expected_reply_prefix, exact=tx.expected_reply):
+            raise RuntimeError(f"{tx.name}: unexpected feature reply {reply.hex()}")
+        print(f"{tx.name}: in={reply.hex()}")
+
+
+def _pick_default_device():
+    devices = enumerate_hidraw()
+    for vid, pid in ((CABLE_VID, CABLE_PID), (DONGLE_VID, DONGLE_PID)):
+        for device in devices:
+            if (
+                device.vendor_id == vid
+                and device.product_id == pid
+                and device.interface_number == DEFAULT_INTERFACE
+            ):
+                return device
+    raise FileNotFoundError("no supported cable or dongle interface found")
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -92,45 +145,39 @@ def main() -> int:
         return 0
 
     when = parse_time_argument(args.time)
-    transactions = build_transaction_sequence(when)
+    if args.device:
+        selected = find_matching_device(device=args.device)
+    elif args.vid == f"{DEFAULT_VID:04x}" and args.pid == f"{DEFAULT_PID:04x}" and args.interface == DEFAULT_INTERFACE:
+        selected = _pick_default_device()
+    else:
+        selected = find_matching_device(
+            vendor_id=_parse_hex(args.vid),
+            product_id=_parse_hex(args.pid),
+            interface_number=args.interface,
+        )
+    is_cable = selected.vendor_id == CABLE_VID and selected.product_id == CABLE_PID
+    transactions = build_cable_transaction_sequence(when) if is_cable else build_transaction_sequence(when)
 
     print(f"target-local-time: {when.isoformat(sep=' ')}")
     for tx in transactions:
         print(f"{tx.name}: out={tx.outgoing.hex()}")
+    print(f"using-device: {_format_device_line(selected)}")
 
     if args.dry_run:
         return 0
 
-    selected = find_matching_device(
-        device=args.device,
-        vendor_id=None if args.device else _parse_hex(args.vid),
-        product_id=None if args.device else _parse_hex(args.pid),
-        interface_number=None if args.device else args.interface,
-    )
-    print(f"using-device: {_format_device_line(selected)}")
-
-    report_size = (
-        args.report_size
-        or selected.output_report_bytes
-        or selected.input_report_bytes
-        or PACKET_SIZE
-    )
-
     with HidrawTransport(selected.path, timeout_seconds=args.timeout) as transport:
-        transport.report_size = report_size
-        drained = transport.drain_pending_reports()
-        if args.debug and drained:
-            for report in drained:
-                print(f"drained: {report.hex()}")
-        for tx in transactions:
-            outgoing = tx.outgoing.ljust(report_size, b"\x00")
-            if len(outgoing) != report_size:
-                raise RuntimeError(f"{tx.name}: report size {report_size} is smaller than packet size")
-            written = transport.write(outgoing)
-            if written != report_size:
-                raise RuntimeError(f"{tx.name}: short write, wrote {written} bytes")
-            reply = _wait_for_matching_reply(transport, tx, args.debug)
-            print(f"{tx.name}: in={reply.hex()}")
+        if is_cable:
+            _run_cable_flow(transport, transactions, args.debug)
+        else:
+            report_size = (
+                args.report_size
+                or selected.output_report_bytes
+                or selected.input_report_bytes
+                or PACKET_SIZE
+            )
+            transport.report_size = report_size
+            _run_dongle_flow(transport, transactions, report_size, args.debug)
 
     return 0
 

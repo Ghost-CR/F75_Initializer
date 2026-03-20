@@ -4,6 +4,11 @@ from datetime import datetime
 from unittest import TestCase
 
 from aula_hacky.protocol import (
+    CABLE_RTC_SET_IN_EXAMPLE,
+    CABLE_SESSION_FINALIZE_IN,
+    CABLE_SESSION_FINALIZE_OUT,
+    CABLE_SESSION_INIT_IN,
+    CABLE_SESSION_INIT_OUT,
     PACKET_SIZE,
     RTC_SET_ACK,
     SESSION_INIT_IN,
@@ -11,9 +16,12 @@ from aula_hacky.protocol import (
     SESSION_QUERY_IN,
     SESSION_QUERY_OUT,
     build_rtc_set_packet,
+    build_cable_rtc_set_packet,
+    build_cable_transaction_sequence,
     build_transaction_sequence,
     checksum,
     decode_rtc_set_packet,
+    is_valid_cable_reply,
     iter_candidate_packets,
     validate_packet,
     validate_reply,
@@ -72,3 +80,25 @@ class ProtocolTests(TestCase):
         raw = b"\x00\x11" + SESSION_QUERY_IN + b"\x00" * 7
         candidates = iter_candidate_packets(raw)
         self.assertIn(SESSION_QUERY_IN, candidates)
+
+    def test_build_cable_rtc_packet_reproduces_capture(self) -> None:
+        when = datetime(2026, 3, 20, 11, 10, 18)
+        actual = build_cable_rtc_set_packet(when)
+        expected = bytes.fromhex(
+            "00015a1a03140b0a120005000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aa55"
+        )
+        self.assertEqual(actual, expected)
+
+    def test_cable_transaction_sequence_shapes(self) -> None:
+        txs = build_cable_transaction_sequence(datetime(2026, 3, 20, 11, 10, 18))
+        self.assertEqual(
+            [tx.name for tx in txs],
+            ["cable-session-init", "cable-rtc-set", "cable-session-finalize"],
+        )
+        self.assertTrue(
+            is_valid_cable_reply(CABLE_SESSION_INIT_IN, txs[0].expected_reply_prefix, txs[0].expected_reply)
+        )
+        self.assertTrue(is_valid_cable_reply(CABLE_RTC_SET_IN_EXAMPLE, txs[1].expected_reply_prefix))
+        self.assertTrue(
+            is_valid_cable_reply(CABLE_SESSION_FINALIZE_IN, txs[2].expected_reply_prefix, txs[2].expected_reply)
+        )

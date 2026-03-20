@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import fcntl
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -262,3 +263,36 @@ class HidrawTransport:
                 break
             drained.append(report)
         return drained
+
+    @staticmethod
+    def _ioc(direction: int, type_: int, nr: int, size: int) -> int:
+        ioc_nrbits = 8
+        ioc_typebits = 8
+        ioc_sizebits = 14
+        ioc_nrshift = 0
+        ioc_typeshift = ioc_nrshift + ioc_nrbits
+        ioc_sizeshift = ioc_typeshift + ioc_typebits
+        ioc_dirshift = ioc_sizeshift + ioc_sizebits
+        return (
+            (direction << ioc_dirshift)
+            | (type_ << ioc_typeshift)
+            | (nr << ioc_nrshift)
+            | (size << ioc_sizeshift)
+        )
+
+    def set_feature(self, report: bytes) -> bytes:
+        if self._fd is None:
+            raise RuntimeError("device is not open")
+        request = self._ioc(0x03, ord("H"), 0x06, len(report))
+        buffer = bytearray(report)
+        fcntl.ioctl(self._fd, request, buffer, True)
+        return bytes(buffer)
+
+    def get_feature(self, report_id: int, size: int) -> bytes:
+        if self._fd is None:
+            raise RuntimeError("device is not open")
+        request = self._ioc(0x03, ord("H"), 0x07, size)
+        buffer = bytearray(size)
+        buffer[0] = report_id
+        fcntl.ioctl(self._fd, request, buffer, True)
+        return bytes(buffer)

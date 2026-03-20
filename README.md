@@ -1,16 +1,16 @@
 # aula-hacky
 
 Linux-first tooling for the proprietary HID channel observed on the keyboard in
-`keyboard5.pcapng`.
+`keyboard5.pcapng` and `keyboard6.pcapng`.
 
-This implements the minimal RTC setter described by the capture:
+This implements two RTC setter paths:
 
-1. Send a fixed 32-byte session-init packet.
-2. Read its 32-byte reply.
-3. Send a fixed 32-byte probe packet.
-4. Read its 32-byte reply.
-5. Send a generated 32-byte time packet.
-6. Read its 32-byte reply.
+- Cable path, preferred when present:
+  - 64-byte HID feature reports on interface `3`
+  - captured from the wired `0c45:800a` device in `keyboard6.pcapng`
+- Dongle path, used as fallback:
+  - 32-byte HID interrupt reports on interface `3`
+  - captured from the `05ac:024f` dongle in `keyboard5.pcapng`
 
 The implementation targets Linux `hidraw` directly, so it does not need
 third-party Python modules. You will typically need root or an appropriate
@@ -68,14 +68,19 @@ uv run python -m unittest discover -s tests -v
 
 ## Device Selection
 
-By default the tool looks for a `hidraw` node with:
+By default the tool prefers:
+
+- vendor ID `0c45`
+- product ID `800a`
+- interface number `3`
+
+If the wired keyboard is not present, it falls back to:
 
 - vendor ID `05ac`
 - product ID `024f`
 - interface number `3`
 
-If your keyboard presents a different product ID on Linux, use `--vid`, `--pid`,
-or pass `--device` explicitly after finding the matching node with `--list`.
+You can always override this with `--vid`, `--pid`, or `--device`.
 
 ## Notes
 
@@ -83,7 +88,14 @@ or pass `--device` explicitly after finding the matching node with `--list`.
   in raw binary.
 - Byte 31 of every 32-byte packet is the checksum:
   `sum(packet[0:31]) & 0xff`.
-- The first two commands are currently replayed as captured setup/probe packets.
+- The dongle path replays the first two captured setup/probe packets.
+- The cable path uses three 64-byte feature reports:
+  - `0418...`
+  - time payload beginning `00015a...`
+  - `0402...`
 - The actual config traffic in `keyboard5.pcapng` is on interface `3`
   (`/dev/hidraw7` on the current machine), which exposes a 32-byte input/output
   vendor report. Interface `4` is a different vendor HID interface.
+- The actual config traffic in `keyboard6.pcapng` is on interface `3`
+  (`/dev/hidraw12` on the current machine), which exposes 64-byte feature
+  reports over control `SET_REPORT` / `GET_REPORT`.

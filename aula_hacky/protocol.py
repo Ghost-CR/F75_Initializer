@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 PACKET_SIZE = 32
+CABLE_PACKET_SIZE = 64
 
 SESSION_INIT_OUT = bytes.fromhex(
     "0200000000000000000000000000000000000000000000000000000000000002"
@@ -19,6 +20,21 @@ SESSION_QUERY_IN = bytes.fromhex(
 )
 RTC_SET_ACK = bytes.fromhex(
     "0c1000000000000000000000000000000000000000000000000000000000001c"
+)
+CABLE_SESSION_INIT_OUT = bytes.fromhex(
+    "04180000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+)
+CABLE_SESSION_INIT_IN = bytes.fromhex(
+    "04180001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+)
+CABLE_RTC_SET_IN_EXAMPLE = bytes.fromhex(
+    "00015a1a03140b0a120005000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aa55"
+)
+CABLE_SESSION_FINALIZE_OUT = bytes.fromhex(
+    "04020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+)
+CABLE_SESSION_FINALIZE_IN = bytes.fromhex(
+    "04020001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 )
 
 
@@ -116,6 +132,25 @@ def is_valid_reply(reply: bytes, expected_prefix: bytes, exact: bytes | None = N
     return True
 
 
+def validate_cable_reply(reply: bytes, expected_prefix: bytes, exact: bytes | None = None) -> None:
+    if len(reply) != CABLE_PACKET_SIZE:
+        raise ValueError(f"cable reply must be {CABLE_PACKET_SIZE} bytes, got {len(reply)}")
+    if not reply.startswith(expected_prefix):
+        raise ValueError(
+            f"cable reply prefix mismatch: expected {expected_prefix.hex()}, got {reply.hex()}"
+        )
+    if exact is not None and reply != exact:
+        raise ValueError(f"cable reply mismatch: expected {exact.hex()}, got {reply.hex()}")
+
+
+def is_valid_cable_reply(reply: bytes, expected_prefix: bytes, exact: bytes | None = None) -> bool:
+    try:
+        validate_cable_reply(reply, expected_prefix, exact=exact)
+    except ValueError:
+        return False
+    return True
+
+
 def iter_candidate_packets(raw_report: bytes) -> list[bytes]:
     candidates: list[bytes] = []
     seen: set[bytes] = set()
@@ -160,6 +195,51 @@ def build_transaction_sequence(when: datetime) -> list[Transaction]:
             outgoing=build_rtc_set_packet(when),
             expected_reply_prefix=bytes([0x0C, 0x10, 0x00, 0x00]),
             expected_reply=RTC_SET_ACK,
+        ),
+    ]
+
+
+def build_cable_rtc_set_packet(when: datetime) -> bytes:
+    year = when.year - 2000
+    if not 0 <= year <= 255:
+        raise ValueError(f"year {when.year} cannot be encoded as year_since_2000")
+
+    body = bytearray(CABLE_PACKET_SIZE)
+    body[0] = 0x00
+    body[1] = 0x01
+    body[2] = 0x5A
+    body[3] = year
+    body[4] = when.month
+    body[5] = when.day
+    body[6] = when.hour
+    body[7] = when.minute
+    body[8] = when.second
+    body[9] = 0x00
+    body[10] = 0x05
+    body[-2] = 0xAA
+    body[-1] = 0x55
+    return bytes(body)
+
+
+def build_cable_transaction_sequence(when: datetime) -> list[Transaction]:
+    return [
+        Transaction(
+            name="cable-session-init",
+            outgoing=CABLE_SESSION_INIT_OUT,
+            expected_reply_prefix=bytes([0x04, 0x18]),
+            expected_reply=None,
+        ),
+        Transaction(
+            name="cable-rtc-set",
+            outgoing=build_cable_rtc_set_packet(when),
+            expected_reply_prefix=bytes([0x00, 0x01, 0x5A]),
+            expected_reply=None,
+        ),
+        Transaction(
+            name="cable-session-finalize",
+            outgoing=CABLE_SESSION_FINALIZE_OUT,
+            expected_reply_prefix=bytes([0x04, 0x02]),
+            expected_reply=None,
         ),
     ]
 
