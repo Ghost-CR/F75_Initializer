@@ -70,6 +70,17 @@ Implemented in `aula_hacky/screen_upload.py`:
 - USB-C screen upload over `ff13` feature reports and `ff68` 4096-byte output reports.
 - Optional chunk ACK wait; `--no-chunk-ack` is currently the verified Terminal/Python path.
 
+Implemented in `aula_hacky/windows_hid.py`:
+
+- Windows HID enumeration via SetupAPI (ctypes, zero dependencies).
+- Windows feature report I/O (`HidD_SetFeature`, `HidD_GetFeature`).
+- Windows output report I/O (`WriteFile`).
+
+Implemented in `aula_hacky/windows_tft_upload.py`:
+
+- Windows TFT upload using native HID APIs.
+- Same atomic transaction safety as macOS (`tft_service.py`).
+
 Dongle checksum:
 
 ```text
@@ -146,6 +157,40 @@ The keyboard has two independent screen memories:
 The metadata command byte 2 (`slot`) selects the target slot (0–255). The official software defaults to slot 1 for the dial-accessible screen. F75Probe exposes `--screen-slot` for any slot in that range; AulaF75Bar hardcodes slot 1 even for its "Upload boot animation" feature, suggesting the true boot animation is firmware-burned and not user-writable.
 
 RoseWaveStudio audit confirmed the `04 28` command (`{0x04, 0x28, 0, 0, 0, 0, 0, 0, 0x01}`) is **only** used during `SyncScreenTime`, not during screen uploads. The upload sequence is strictly `04 18` → `04 72 SS LL HH` → chunks → `04 02`.
+
+### Windows HID Interface Audit (2026-05-07)
+
+Static reverse engineering from official Windows driver `DeviceDriver.exe` (Beta 1.0.0.5) confirms the following HID interfaces on USB-C (`0c45:800a`):
+
+```text
+MI_03 (control):  usage_page=0xFF13 usage=0x0001  feature=65  input=65  output=65
+MI_02 (data):     usage_page=0xFF68 usage=0x0061  output=4097 input=65  feature=0
+```
+
+Key findings:
+- **Output report size 4097** = 1 byte report ID + 4096 bytes payload. This matches our `SCREEN_CHUNK_BYTES=4096` exactly.
+- **Feature report size 65** = 1 byte report ID + 64 bytes payload. This matches our 64-byte control commands (`04 18`, `04 72`, `04 02`).
+- `gif_headlength="256"` in `layouts/rgb-keyboard.xml` confirms our 256-byte stream header.
+- `GetImageRGB565Data` symbol confirms the app converts frames to RGB565 before upload.
+- The official app decomposes GIFs into individual PNG frames (observed 251 frames → 251 PNGs in AppData), then converts to RGB565 for HID transfer.
+- SQLite `t_ledframe_data.delay_time=10` suggests delay units of ~2ms (10 units ≈ 20ms per frame).
+
+Transfer model:
+```text
+Control: HidD_SetFeature / HidD_GetFeature on MI_03, 65-byte reports
+Data:    WriteFile on MI_02, 4097-byte output reports (8 reports per 128x128 frame)
+Frame:   32768 bytes RGB565 LE
+Header:  256 bytes (frame_count + delay table + padding)
+```
+
+Implemented Windows transport: `aula_hacky/windows_hid.py` (ctypes, zero dependencies).
+Implemented Windows uploader: `aula_hacky/windows_tft_upload.py`.
+
+### Current Blocker
+
+The keyboard does not accept uploads from macOS (nor from our Windows uploader) since the atomicity incident. The official Windows software **does** upload successfully (observed GIF decomposition and SQLite logging). Unknown: whether the official software sends a "clear/format" command before upload, uses a different slot, or performs a handshake we have not captured.
+
+Next step: run `python -m aula_hacky.windows_tft_upload --test-pattern --slot N --debug` on Windows for slots 0, 1, 2, 3. If all fail, capture official software buffers via API Monitor or Frida hook on `hid.dll!HidD_SetFeature` and `kernel32!WriteFile`.
 
 ## Safety Rules
 
