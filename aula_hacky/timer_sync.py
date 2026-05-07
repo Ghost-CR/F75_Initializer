@@ -18,7 +18,7 @@ from .cli import (
     _wait_for_matching_reply,
 )
 from .hidraw_linux import HidrawTransport, enumerate_hidraw
-from .protocol import (
+from .protocol_core import (
     CABLE_PACKET_SIZE,
     PACKET_SIZE,
     build_cable_transaction_sequence,

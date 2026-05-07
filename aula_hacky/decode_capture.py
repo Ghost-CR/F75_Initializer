@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 
-from .protocol import decode_rtc_set_packet
+from .protocol_core import decode_rtc_set_packet
 
 
 def build_parser() -> argparse.ArgumentParser:

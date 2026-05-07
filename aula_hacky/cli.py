@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 from .hidraw_linux import HidrawTransport, enumerate_hidraw, find_matching_device
-from .protocol import (
+from .protocol_core import (
     CABLE_PACKET_SIZE,
     PACKET_SIZE,
     build_cable_transaction_sequence,
