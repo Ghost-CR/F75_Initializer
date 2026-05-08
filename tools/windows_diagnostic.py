@@ -10,9 +10,18 @@ import subprocess
 import json
 import urllib.request
 import sys
+import ctypes
 
 # CONFIGURACIÓN — Cambia esto si la IP de tu Mac es diferente
 BRIDGE_URL = "http://192.168.1.15:8765"
+
+
+def is_admin():
+    """Verifica si el script se ejecuta como Administrador en Windows."""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
 
 def send_to_mac(message_type, payload):
     """Envía un mensaje al servidor bridge en Mac."""
@@ -70,6 +79,17 @@ def main():
     print("AULA F75 Max — Windows Diagnostic Script")
     print(f"Enviando resultados a: {BRIDGE_URL}")
     print("=" * 60)
+
+    # Verificar privilegios de administrador
+    if not is_admin():
+        print("\n⚠️  ADVERTENCIA: Este script NO se ejecuta como Administrador.")
+        print("    En Windows, la enumeración HID requiere privilegios elevados.")
+        print("    Cierra esta ventana y ejecuta CMD/PowerShell como Administrador.")
+        print("    Click derecho → 'Ejecutar como administrador'")
+        send_to_mac("admin_warning", {"is_admin": False})
+    else:
+        print("\n✅ Ejecutando como Administrador.")
+        send_to_mac("admin_check", {"is_admin": True})
 
     # Paso 1: Verificar conexión con Mac
     print("\n[1/6] Verificando conexión con Mac...")
