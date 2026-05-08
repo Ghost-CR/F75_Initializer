@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import time
+import ctypes
 from pathlib import Path
 
 # Add parent to path
@@ -82,13 +83,12 @@ def main() -> int:
         logger.log_feature_set(0, exit_payload, "exit")
         hid_set_feature(control_handle, 0, exit_payload)
         
-        print(f"\n✅ Capture complete. Log: {logger.log_file}")
+        print(f"\nCapture complete. Log: {logger.log_file}")
         
     except Exception as exc:
-        print(f"\n❌ Error: {exc}")
+        print(f"\nError: {exc}")
         return 1
     finally:
-        from ctypes import wintypes
         ctypes.windll.kernel32.CloseHandle(pipe_handle)
         ctypes.windll.kernel32.CloseHandle(control_handle)
     
@@ -97,3 +97,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
