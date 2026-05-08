@@ -1,143 +1,119 @@
-#!/usr/bin/env python3
-"""
-Script de diagnóstico para Windows — AULA F75 Max TFT Upload Test
-Copia este archivo a tu PC Windows y ejecútalo con Codex.
+﻿#!/usr/bin/env python3
+"""Windows diagnostic for AULA F75 Max with manual HID paths."""
 
-Envía resultados automáticamente al bridge server en Mac.
-"""
-
-import subprocess
-import json
-import urllib.request
-import sys
 import ctypes
+import json
+import subprocess
+import urllib.request
 
-# CONFIGURACIÓN — Cambia esto si la IP de tu Mac es diferente
 BRIDGE_URL = "http://192.168.1.15:8765"
+CONTROL_PATH = r"HID\VID_0C45&PID_800A&MI_03\8&5E1A8CD&0&0000"
+PIPE_PATH = r"HID\VID_0C45&PID_800A&MI_02\8&1DA53512&0&0000"
 
 
-def is_admin():
-    """Verifica si el script se ejecuta como Administrador en Windows."""
+def is_admin() -> bool:
     try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
 
-def send_to_mac(message_type, payload):
-    """Envía un mensaje al servidor bridge en Mac."""
-    data = {
-        "from": "CODEX_WINDOWS",
-        "type": message_type,
-        "payload": payload
-    }
+
+def send_to_mac(message_type: str, payload):
+    data = {"from": "CODEX_WINDOWS", "type": message_type, "payload": payload}
     body = json.dumps(data).encode("utf-8")
     req = urllib.request.Request(
         BRIDGE_URL,
         data=body,
         headers={"Content-Type": "application/json"},
-        method="POST"
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        print(f"⚠️  Error enviando a Mac: {e}")
-        return {"error": str(e)}
+    except Exception as exc:
+        print(f"[WARN] Error enviando a Mac: {exc}")
+        return {"error": str(exc)}
 
 
-def run_command(cmd, timeout=30):
-    """Ejecuta un comando y devuelve stdout/stderr."""
+def run_command(cmd: str, timeout: int = 60):
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
-            shell=True
+            shell=True,
         )
         return {
+            "command": cmd,
             "stdout": result.stdout,
             "stderr": result.stderr,
-            "returncode": result.returncode
+            "returncode": result.returncode,
         }
     except subprocess.TimeoutExpired:
         return {
+            "command": cmd,
             "stdout": "",
             "stderr": f"Timeout after {timeout}s",
-            "returncode": -1
+            "returncode": -1,
         }
-    except Exception as e:
+    except Exception as exc:
         return {
+            "command": cmd,
             "stdout": "",
-            "stderr": str(e),
-            "returncode": -1
+            "stderr": str(exc),
+            "returncode": -1,
         }
 
 
-def main():
+def run_slot(slot: int):
+    cmd = (
+        f'python -m aula_hacky.windows_tft_upload --test-pattern --slot {slot} --debug '
+        f'--control-path "{CONTROL_PATH}" --pipe-path "{PIPE_PATH}"'
+    )
+    return run_command(cmd, timeout=120)
+
+
+def main() -> int:
     print("=" * 60)
-    print("AULA F75 Max — Windows Diagnostic Script")
-    print(f"Enviando resultados a: {BRIDGE_URL}")
+    print("AULA F75 Max - Windows Diagnostic Script")
+    print(f"Bridge: {BRIDGE_URL}")
+    print(f"Control path: {CONTROL_PATH}")
+    print(f"Pipe path: {PIPE_PATH}")
     print("=" * 60)
 
-    # Verificar privilegios de administrador
-    if not is_admin():
-        print("\n⚠️  ADVERTENCIA: Este script NO se ejecuta como Administrador.")
-        print("    En Windows, la enumeración HID requiere privilegios elevados.")
-        print("    Cierra esta ventana y ejecuta CMD/PowerShell como Administrador.")
-        print("    Click derecho → 'Ejecutar como administrador'")
-        send_to_mac("admin_warning", {"is_admin": False})
-    else:
-        print("\n✅ Ejecutando como Administrador.")
-        send_to_mac("admin_check", {"is_admin": True})
+    admin = is_admin()
+    print(f"[ADMIN] {admin}")
+    send_to_mac("admin_check", {"is_admin": admin})
 
-    # Paso 1: Verificar conexión con Mac
-    print("\n[1/6] Verificando conexión con Mac...")
+    print("\n[1/6] Verificando conexion con Mac...")
     try:
         req = urllib.request.Request(BRIDGE_URL, method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             health = json.loads(resp.read().decode("utf-8"))
-            print(f"✅ Mac responde: {health}")
-    except Exception as e:
-        print(f"❌ No puedo conectar con Mac: {e}")
-        print("Verifica que ambas PCs están en la misma red.")
-        print(f"IP actual del bridge: {BRIDGE_URL}")
+            print(f"[OK] Mac responde: {health}")
+    except Exception as exc:
+        print(f"[ERROR] No puedo conectar con Mac: {exc}")
         return 1
 
-    # Paso 2: Enumerar dispositivos HID (usando PowerShell)
-    print("\n[2/6] Enumerando dispositivos HID...")
-    hid_result = run_command("python -m aula_hacky.windows_hid_ps")
+    print("\n[2/6] Enumerando HID via PowerShell fallback...")
+    hid_result = run_command("python -m aula_hacky.windows_hid_ps", timeout=60)
     print(hid_result["stdout"])
     if hid_result["stderr"]:
         print(f"Errores: {hid_result['stderr']}")
     send_to_mac("hid_enumeration", hid_result)
 
-    # Paso 3: Probar upload a slot 0
-    print("\n[3/6] Probando upload a slot 0...")
-    slot0 = run_command("python -m aula_hacky.windows_tft_upload_v2 --test-pattern --slot 0 --debug")
-    print(slot0["stdout"][-500:] if len(slot0["stdout"]) > 500 else slot0["stdout"])
-    send_to_mac("upload_slot_0", slot0)
-
-    # Paso 4: Probar upload a slot 1
-    print("\n[4/6] Probando upload a slot 1...")
-    slot1 = run_command("python -m aula_hacky.windows_tft_upload_v2 --test-pattern --slot 1 --debug")
-    print(slot1["stdout"][-500:] if len(slot1["stdout"]) > 500 else slot1["stdout"])
-    send_to_mac("upload_slot_1", slot1)
-
-    # Paso 5: Probar upload a slot 2
-    print("\n[5/6] Probando upload a slot 2...")
-    slot2 = run_command("python -m aula_hacky.windows_tft_upload_v2 --test-pattern --slot 2 --debug")
-    print(slot2["stdout"][-500:] if len(slot2["stdout"]) > 500 else slot2["stdout"])
-    send_to_mac("upload_slot_2", slot2)
-
-    # Paso 6: Probar upload a slot 3
-    print("\n[6/6] Probando upload a slot 3...")
-    slot3 = run_command("python -m aula_hacky.windows_tft_upload_v2 --test-pattern --slot 3 --debug")
-    print(slot3["stdout"][-500:] if len(slot3["stdout"]) > 500 else slot3["stdout"])
-    send_to_mac("upload_slot_3", slot3)
+    for idx, slot in enumerate([0, 1, 2, 3], start=3):
+        print(f"\n[{idx}/6] Probando upload slot {slot}...")
+        res = run_slot(slot)
+        out = res["stdout"]
+        print(out[-1000:] if len(out) > 1000 else out)
+        if res["stderr"]:
+            print(f"Errores: {res['stderr']}")
+        send_to_mac(f"upload_slot_{slot}", res)
 
     print("\n" + "=" * 60)
-    print("✅ Diagnóstico completo. Todos los resultados enviados a Mac.")
+    print("[OK] Diagnostico completo. Resultados enviados a Mac.")
     print("=" * 60)
     return 0
 
