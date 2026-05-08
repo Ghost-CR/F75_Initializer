@@ -204,14 +204,22 @@ python -m aula_hacky.windows_tft_upload --test-pattern --slot 1 --debug ^
 
 **Commits:** `887421c` (manual path support), `2053713` (diagnostic script update).
 
-### macOS Upload Blocker
+### macOS Upload Blocker — RESOLVED (2026-05-08)
 
-The keyboard does not accept uploads from macOS since the atomicity incident. The Windows uploader **does work** with manual paths. The macOS issue may be related to:
-- Different report ID handling (macOS uses raw 64-byte reports vs Windows 65-byte with report ID)
-- Timing differences
-- USB stack differences
+**Root cause:** macOS was sending HID reports **without** the report_id prefix byte, while Windows sends them **with** the report_id prefix.
 
-Next step for macOS: Compare Windows vs macOS report buffers byte-by-byte using the same stream data.
+| Report Type | Windows (working) | macOS (broken) |
+|-------------|-------------------|----------------|
+| Feature (control) | 65 bytes (0x00 + 64 payload) | 64 bytes (no prefix) |
+| Output (chunks) | 4097 bytes (0x00 + 4096 payload) | 4096 bytes (no prefix) |
+
+**Discovery method:** Byte-by-byte comparison using `tools/capture_windows.py` vs `tools/capture_macos.py`. Windows capture showed 64-byte payloads with `report_id=0` but `HidD_SetFeature` automatically prepends the report_id byte on the wire. macOS `IOHIDDeviceSetReport` with `prefix_report_id=False` sent raw 64/4096 bytes without the prefix.
+
+**Fix:** Changed `hid_macos.py` `write()` default to `prefix_report_id=True`, and `tft_service.py` `_send_control()` to use `prefix_report_id=True`. Now macOS sends 65-byte feature reports and 4097-byte output reports, matching Windows behavior.
+
+**Verification pending:** Hardware test on macOS with the corrected code.
+
+**Commits:** `43ab7e7` (macOS report_id fix), `36149be` (capture tools).
 
 ## Safety Rules
 
