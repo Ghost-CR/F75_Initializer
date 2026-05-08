@@ -30,6 +30,17 @@ class TFTTransactionError(RuntimeError):
     pass
 
 
+def normalize_hid_path(value: str) -> str:
+    """Accept either full HID device path or Windows HID instance id."""
+    raw = value.strip()
+    if raw.startswith("\\\\?\\"):
+        return raw
+    lowered = raw.lower()
+    if lowered.startswith("hid\\vid_"):
+        return r"\\?\\" + lowered.replace("\\", "#") + "#{4d1e55b2-f16f-11cf-88cb-001111000030}"
+    return raw
+
+
 def find_device_paths(vid: int, pid: int, usage_page: int, usage: int):
     for dev in enumerate_hid_devices():
         if dev["vid"] == vid and dev["pid"] == pid and dev["usage_page"] == usage_page and dev["usage"] == usage:
@@ -37,13 +48,29 @@ def find_device_paths(vid: int, pid: int, usage_page: int, usage: int):
     raise RuntimeError(f"No device found for vid=0x{vid:04X} pid=0x{pid:04X} usage_page=0x{usage_page:04X} usage=0x{usage:04X}")
 
 
-def windows_tft_upload(stream: ScreenStream, slot: int = 1, debug: bool = False, chunk_delay: float = 0.04) -> None:
-    control_path, control_feature_size, _ = find_device_paths(
-        WIRED_VID, WIRED_PID, SCREEN_CONTROL_USAGE_PAGE, SCREEN_CONTROL_USAGE
-    )
-    pipe_path, _, pipe_output_size = find_device_paths(
-        WIRED_VID, WIRED_PID, SCREEN_PIPE_USAGE_PAGE, SCREEN_PIPE_USAGE
-    )
+def windows_tft_upload(
+    stream: ScreenStream,
+    slot: int = 1,
+    debug: bool = False,
+    chunk_delay: float = 0.04,
+    control_path: str | None = None,
+    pipe_path: str | None = None,
+) -> None:
+    if control_path is None:
+        control_path, control_feature_size, _ = find_device_paths(
+            WIRED_VID, WIRED_PID, SCREEN_CONTROL_USAGE_PAGE, SCREEN_CONTROL_USAGE
+        )
+    else:
+        control_path = normalize_hid_path(control_path)
+        control_feature_size = 65
+
+    if pipe_path is None:
+        pipe_path, _, pipe_output_size = find_device_paths(
+            WIRED_VID, WIRED_PID, SCREEN_PIPE_USAGE_PAGE, SCREEN_PIPE_USAGE
+        )
+    else:
+        pipe_path = normalize_hid_path(pipe_path)
+        pipe_output_size = SCREEN_CHUNK_BYTES + 1
 
     if debug:
         print(f"control: {control_path} feature={control_feature_size}")
@@ -104,6 +131,14 @@ def main() -> int:
     parser.add_argument("--slot", type=int, default=1, help="screen slot (0..255)")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--chunk-delay", type=float, default=0.04)
+    parser.add_argument(
+        "--control-path",
+        help="optional full HID path or HID\\VID_... instance id for control interface (MI_03 / FF13)",
+    )
+    parser.add_argument(
+        "--pipe-path",
+        help="optional full HID path or HID\\VID_... instance id for data interface (MI_02 / FF68)",
+    )
     args = parser.parse_args()
 
     if args.slot < 0 or args.slot > 255:
@@ -113,7 +148,14 @@ def main() -> int:
     print(f"Stream: frames={stream.frame_count} chunks={stream.chunk_count} bytes={len(stream.data)}")
 
     try:
-        windows_tft_upload(stream, slot=args.slot, debug=args.debug, chunk_delay=args.chunk_delay)
+        windows_tft_upload(
+            stream,
+            slot=args.slot,
+            debug=args.debug,
+            chunk_delay=args.chunk_delay,
+            control_path=args.control_path,
+            pipe_path=args.pipe_path,
+        )
     except TFTTransactionError as exc:
         print(f"ERROR: {exc}")
         return 1

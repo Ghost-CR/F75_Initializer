@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import subprocess
 import time
 from ctypes import wintypes
 
@@ -26,6 +27,7 @@ GENERIC_WRITE = 0x40000000
 FILE_SHARE_READ = 0x00000001
 FILE_SHARE_WRITE = 0x00000002
 OPEN_EXISTING = 3
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 
 class HIDD_ATTRIBUTES(ctypes.Structure):
@@ -58,92 +60,175 @@ class HIDP_CAPS(ctypes.Structure):
     ]
 
 
+class GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", wintypes.DWORD),
+        ("Data2", wintypes.WORD),
+        ("Data3", wintypes.WORD),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class SP_DEVICE_INTERFACE_DATA(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("InterfaceClassGuid", GUID),
+        ("Flags", wintypes.DWORD),
+        ("Reserved", ctypes.c_void_p),
+    ]
+
+
+HID_INTERFACE_GUID = "{4d1e55b2-f16f-11cf-88cb-001111000030}"
+
+
+def _probe_hid_path(path: str):
+    handle = create_file(
+        path,
+        0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+        OPEN_EXISTING,
+        0,
+        None,
+    )
+    if handle == INVALID_HANDLE_VALUE:
+        return None
+    try:
+        attrs = HIDD_ATTRIBUTES()
+        attrs.Size = ctypes.sizeof(HIDD_ATTRIBUTES)
+        if not HidD_GetAttributes(handle, ctypes.byref(attrs)):
+            return None
+
+        preparsed = ctypes.c_void_p()
+        if not HidD_GetPreparsedData(handle, ctypes.byref(preparsed)):
+            return None
+        try:
+            caps = HIDP_CAPS()
+            if HidP_GetCaps(preparsed, ctypes.byref(caps)) != 0:
+                return None
+            return {
+                "path": path,
+                "vid": attrs.VendorID,
+                "pid": attrs.ProductID,
+                "usage_page": caps.UsagePage,
+                "usage": caps.Usage,
+                "input_report_bytes": caps.InputReportByteLength,
+                "output_report_bytes": caps.OutputReportByteLength,
+                "feature_report_bytes": caps.FeatureReportByteLength,
+            }
+        finally:
+            HidD_FreePreparsedData(preparsed)
+    finally:
+        close_handle(handle)
+
+
+def _enumerate_hid_devices_powershell_fallback():
+    cmd = (
+        r"Get-PnpDevice -Class HIDClass | "
+        r"Where-Object { $_.InstanceId -match '^HID\\VID_[0-9A-Fa-f]{4}&PID_[0-9A-Fa-f]{4}' } | "
+        r"Select-Object -ExpandProperty InstanceId"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", cmd],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode != 0:
+        return
+
+    seen = set()
+    for line in result.stdout.splitlines():
+        inst = line.strip()
+        if not inst:
+            continue
+        path = r"\\?\\" + inst.lower().replace("\\", "#") + "#" + HID_INTERFACE_GUID
+        if path in seen:
+            continue
+        seen.add(path)
+        dev = _probe_hid_path(path)
+        if dev is not None:
+            yield dev
+
+
 def enumerate_hid_devices():
     """Yield (path, vid, pid, usage_page, usage, caps) for all HID devices."""
-    from ctypes import wintypes
-
     setupapi = ctypes.windll.setupapi
-    cfgmgr32 = ctypes.windll.cfgmgr32
 
-    # {4D1E55B2-F16F-11CF-88CB-001111000030}
-    hid_guid = (ctypes.c_byte * 16)(
-        0xB2, 0x55, 0x1E, 0x4D, 0x6F, 0xF1, 0xCF, 0x11, 0x88, 0xCB,
-        0x00, 0x11, 0x11, 0x00, 0x00, 0x30
-    )
+    HidD_GetHidGuid = hid_dll.HidD_GetHidGuid
+    HidD_GetHidGuid.argtypes = [ctypes.POINTER(GUID)]
+    HidD_GetHidGuid.restype = None
+    hid_guid = GUID()
+    HidD_GetHidGuid(ctypes.byref(hid_guid))
+
+    SetupDiGetClassDevsW = setupapi.SetupDiGetClassDevsW
+    SetupDiGetClassDevsW.argtypes = [ctypes.POINTER(GUID), wintypes.LPCWSTR, wintypes.HWND, wintypes.DWORD]
+    SetupDiGetClassDevsW.restype = ctypes.c_void_p
+    SetupDiEnumDeviceInterfaces = setupapi.SetupDiEnumDeviceInterfaces
+    SetupDiEnumDeviceInterfaces.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(GUID), wintypes.DWORD, ctypes.POINTER(SP_DEVICE_INTERFACE_DATA)]
+    SetupDiEnumDeviceInterfaces.restype = wintypes.BOOL
+    SetupDiGetDeviceInterfaceDetailW = setupapi.SetupDiGetDeviceInterfaceDetailW
+    SetupDiGetDeviceInterfaceDetailW.argtypes = [ctypes.c_void_p, ctypes.POINTER(SP_DEVICE_INTERFACE_DATA), ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+    SetupDiGetDeviceInterfaceDetailW.restype = wintypes.BOOL
+    SetupDiDestroyDeviceInfoList = setupapi.SetupDiDestroyDeviceInfoList
+    SetupDiDestroyDeviceInfoList.argtypes = [ctypes.c_void_p]
+    SetupDiDestroyDeviceInfoList.restype = wintypes.BOOL
 
     DIGCF_PRESENT = 0x00000002
     DIGCF_DEVICEINTERFACE = 0x00000010
 
-    h_info = setupapi.SetupDiGetClassDevsW(
+    h_info = SetupDiGetClassDevsW(
         ctypes.byref(hid_guid), None, None, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE
     )
-    if h_info == ctypes.c_void_p(-1).value:
+    if h_info == INVALID_HANDLE_VALUE:
         return
 
+    yielded = False
     try:
-        # SP_DEVICE_INTERFACE_DATA: DWORD cbSize + GUID + DWORD Flags + ULONG_PTR Reserved
-        _spdid_size = 32 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
-
         index = 0
         while True:
-            iface_data = ctypes.create_string_buffer(_spdid_size)
-            ctypes.cast(iface_data, ctypes.POINTER(wintypes.DWORD))[0] = _spdid_size
+            iface_data = SP_DEVICE_INTERFACE_DATA()
+            iface_data.cbSize = ctypes.sizeof(SP_DEVICE_INTERFACE_DATA)
 
-            ok = setupapi.SetupDiEnumDeviceInterfaces(
+            ok = SetupDiEnumDeviceInterfaces(
                 h_info, None, ctypes.byref(hid_guid), index, ctypes.byref(iface_data)
             )
             if not ok:
                 break
 
             req_size = wintypes.DWORD()
-            setupapi.SetupDiGetDeviceInterfaceDetailW(
+            SetupDiGetDeviceInterfaceDetailW(
                 h_info, ctypes.byref(iface_data), None, 0, ctypes.byref(req_size), None
             )
 
-            # SP_DEVICE_INTERFACE_DETAIL_DATA_W: DWORD cbSize + WCHAR DevicePath[ANYSIZE_ARRAY]
-            # cbSize is 6 on both 32-bit and 64-bit (4 + 2 for first WCHAR)
             detail_size = req_size.value
-            buf = ctypes.create_string_buffer(detail_size)
-            ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))[0] = 6
+            if detail_size == 0:
+                index += 1
+                continue
 
-            ok = setupapi.SetupDiGetDeviceInterfaceDetailW(
+            buf = ctypes.create_string_buffer(detail_size)
+            cb_size = 8 if ctypes.sizeof(ctypes.c_void_p) == 8 else 6
+            ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))[0] = cb_size
+
+            ok = SetupDiGetDeviceInterfaceDetailW(
                 h_info, ctypes.byref(iface_data), buf, detail_size, None, None
             )
             if ok:
-                # WCHAR path starts at offset 4 (cbSize DWORD)
-                path = ctypes.wstring_at(ctypes.addressof(buf) + 4)
-                handle = create_file(
-                    path,
-                    0,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    None,
-                    OPEN_EXISTING,
-                    0,
-                    None,
-                )
-                if handle != -1:
-                    attrs = HIDD_ATTRIBUTES()
-                    attrs.Size = ctypes.sizeof(HIDD_ATTRIBUTES)
-                    if HidD_GetAttributes(handle, ctypes.byref(attrs)):
-                        preparsed = ctypes.c_void_p()
-                        if HidD_GetPreparsedData(handle, ctypes.byref(preparsed)):
-                            caps = HIDP_CAPS()
-                            if HidP_GetCaps(preparsed, ctypes.byref(caps)) == 0:
-                                yield {
-                                    "path": path,
-                                    "vid": attrs.VendorID,
-                                    "pid": attrs.ProductID,
-                                    "usage_page": caps.UsagePage,
-                                    "usage": caps.Usage,
-                                    "input_report_bytes": caps.InputReportByteLength,
-                                    "output_report_bytes": caps.OutputReportByteLength,
-                                    "feature_report_bytes": caps.FeatureReportByteLength,
-                                }
-                            HidD_FreePreparsedData(preparsed)
-                    close_handle(handle)
+                # DevicePath follows cbSize; on x64, align to 8-byte offset.
+                path_offset = 8 if ctypes.sizeof(ctypes.c_void_p) == 8 else 4
+                path = ctypes.wstring_at(ctypes.addressof(buf) + path_offset)
+                dev = _probe_hid_path(path)
+                if dev is not None:
+                    yielded = True
+                    yield dev
             index += 1
     finally:
-        setupapi.SetupDiDestroyDeviceInfoList(h_info)
+        SetupDiDestroyDeviceInfoList(h_info)
+
+    # Some Windows environments fail SetupAPI interface detail enumeration
+    # while PnP still reports HID instance IDs. Probe those paths directly.
+    if not yielded:
+        yield from _enumerate_hid_devices_powershell_fallback()
 
 
 def open_hid_device(path: str) -> wintypes.HANDLE:
@@ -156,7 +241,7 @@ def open_hid_device(path: str) -> wintypes.HANDLE:
         0,
         None,
     )
-    if handle == -1:
+    if handle == INVALID_HANDLE_VALUE:
         err = ctypes.get_last_error()
         raise OSError(f"Cannot open HID device {path}: error {err}")
     return handle
