@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import time
 import ctypes
+import json
 from pathlib import Path
 
 # Add parent to path
@@ -39,7 +40,9 @@ def find_device_paths(vid: int, pid: int, usage_page: int, usage: int):
 
 
 def main() -> int:
-    logger = ByteLogger(output_dir="logs", platform="windows")
+    repo_root = Path(__file__).resolve().parent.parent
+    log_dir = repo_root / "logs"
+    logger = ByteLogger(output_dir=str(log_dir), platform="windows")
     
     print("Windows Buffer Capture for AULA F75 Max")
     print(f"Logging to: {logger.log_file}")
@@ -83,7 +86,21 @@ def main() -> int:
         logger.log_feature_set(0, exit_payload, "exit")
         hid_set_feature(control_handle, 0, exit_payload)
         
+        json_snapshot_path = log_dir / "windows_latest_capture.json"
+        entries = [
+            json.loads(line)
+            for line in logger.log_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        snapshot = {
+            "source_log": str(logger.log_file),
+            "entry_count": len(entries),
+            "entries": entries,
+        }
+        json_snapshot_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+
         print(f"\nCapture complete. Log: {logger.log_file}")
+        print(f"JSON snapshot: {json_snapshot_path}")
         
     except Exception as exc:
         print(f"\nError: {exc}")

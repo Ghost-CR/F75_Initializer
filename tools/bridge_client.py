@@ -65,11 +65,11 @@ def main():
     
     try:
         result = send_message(args.url, args.type, payload, args.sender)
-        print(f"✅ Message sent successfully!")
+        print("Message sent successfully.")
         print(f"Response: {result}")
         return 0
     except Exception as e:
-        print(f"❌ Error sending message: {e}")
+        print(f"Error sending message: {e}")
         return 1
 
 
