@@ -186,11 +186,32 @@ Header:  256 bytes (frame_count + delay table + padding)
 Implemented Windows transport: `aula_hacky/windows_hid.py` (ctypes, zero dependencies).
 Implemented Windows uploader: `aula_hacky/windows_tft_upload.py`.
 
-### Current Blocker
+### Windows HID Enumeration Workaround (2026-05-08)
 
-The keyboard does not accept uploads from macOS (nor from our Windows uploader) since the atomicity incident. The official Windows software **does** upload successfully (observed GIF decomposition and SQLite logging). Unknown: whether the official software sends a "clear/format" command before upload, uses a different slot, or performs a handshake we have not captured.
+**Issue:** `windows_hid.py` auto-enumeration via ctypes/SetupAPI may return empty results even when the AULA F75 Max is connected and visible in Device Manager.
 
-Next step: run `python -m aula_hacky.windows_tft_upload --test-pattern --slot N --debug` on Windows for slots 0, 1, 2, 3. If all fail, capture official software buffers via API Monitor or Frida hook on `hid.dll!HidD_SetFeature` and `kernel32!WriteFile`.
+**Verified workaround:** Use manual HID InstanceId paths with `--control-path` and `--pipe-path`:
+
+```cmd
+python -m aula_hacky.windows_tft_upload --test-pattern --slot 1 --debug ^
+  --control-path "HID\VID_0C45&PID_800A&MI_03\8&5E1A8CD&0&0000" ^
+  --pipe-path "HID\VID_0C45&PID_800A&MI_02\8&1DA53512&0&0000"
+```
+
+**Verified result:** Upload completes successfully (`begin → metadata → 9 chunks → exit`).
+
+**Discovery:** PowerShell `Get-PnpDevice` correctly enumerates HID InstanceIds, but the ctypes SetupAPI approach does not always open the device handles. The `windows_tft_upload.py` now supports `normalize_hid_path()` to accept either full device paths or Windows InstanceIds.
+
+**Commits:** `887421c` (manual path support), `2053713` (diagnostic script update).
+
+### macOS Upload Blocker
+
+The keyboard does not accept uploads from macOS since the atomicity incident. The Windows uploader **does work** with manual paths. The macOS issue may be related to:
+- Different report ID handling (macOS uses raw 64-byte reports vs Windows 65-byte with report ID)
+- Timing differences
+- USB stack differences
+
+Next step for macOS: Compare Windows vs macOS report buffers byte-by-byte using the same stream data.
 
 ## Safety Rules
 
