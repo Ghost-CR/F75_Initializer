@@ -421,12 +421,12 @@ class MacHIDTransport:
             return
         self._reports.put(bytes(report[i] for i in range(report_length)))
 
-    def write(self, payload: bytes) -> int:
+    def write(self, payload: bytes, prefix_report_id: bool = True) -> int:
         return self.set_report(
             report_type=K_IOHID_REPORT_TYPE_OUTPUT,
             report_id=0,
             payload=payload,
-            prefix_report_id=False,
+            prefix_report_id=prefix_report_id,
         )
 
     def set_report(

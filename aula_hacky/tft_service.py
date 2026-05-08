@@ -89,7 +89,7 @@ class TFTService:
             K_IOHID_REPORT_TYPE_FEATURE,
             report_id=0,
             payload=payload,
-            prefix_report_id=False,
+            prefix_report_id=True,
         )
         if written != 64:
             raise TFTTransactionError(
