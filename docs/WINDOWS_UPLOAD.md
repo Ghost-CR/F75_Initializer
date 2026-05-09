@@ -8,120 +8,144 @@ Run the AULA F75 Max screen uploader directly on Windows using the official USB 
 - Windows 10/11
 - Python 3.11+ installed on Windows
 - The keyboard connected via **USB-C cable**
-- (Optional) Pillow if you want to upload custom GIFs
+- Pillow (`python -m pip install Pillow`) for GIF uploads
+- **Kill DeviceDriver.exe** before running our uploader (it locks the HID interfaces)
 
-## Step 1: Copy project to Windows
-
-Copy the entire `F75_Initializer` folder to your Windows machine (USB drive, cloud, etc.).
-
-## Step 2: Install Pillow (optional)
-
-If you want to upload GIFs instead of test patterns:
-
-```cmd
-cd F75_Initializer
-python -m pip install Pillow
+```powershell
+Stop-Process -Name "DeviceDriver" -Force
 ```
 
-## Step 3: Generate a test GIF (optional)
+## HID Interfaces
 
-```cmd
-python tools\generate_test_gif.py test.gif --frames 5
-```
+The keyboard exposes two vendor HID interfaces when connected via USB-C:
 
-This creates a 5-frame, 128x128 GIF with solid color frames.
+| Interface | Usage Page | Usage | Purpose | Report Sizes |
+|-----------|-----------|-------|---------|--------------|
+| MI_03 | `0xFF13` | `0x0001` | **Control** — commands & responses | in=65, out=65, feature=65 |
+| MI_02 | `0xFF68` | `0x0061` | **Data pipe** — image chunks | in=65, out=4097, feature=0 |
 
-## Step 4: Enumerate HID devices
+Enumerate them:
 
 ```cmd
 python -m aula_hacky.windows_hid
 ```
 
-You should see:
+## Reverse-Engineered Protocol (Verified)
 
-```text
-AULA F75 Max: \\?\hid#vid_0c45&pid_800a&mi_03#...
-  usage_page=0xFF13 usage=0x0001
-  input=65 output=65 feature=65
-AULA F75 Max: \\?\hid#vid_0c45&pid_800a&mi_02#...
-  usage_page=0xFF68 usage=0x0061
-  input=65 output=4097 feature=0
+Based on full USBPcap capture of the official software (`DeviceDriver.exe`).
+
+### Control Commands (MI_03 via `HidD_SetFeature` / `HidD_GetFeature`)
+
+All control commands are **64-byte feature reports** (prepended with report_id=0 on Windows, total 65 bytes).
+
+| Command | Bytes | Purpose |
+|---------|-------|---------|
+| `04 18` | `build_control_command(bytes([0x04, 0x18]))` | **Begin** — signals start of upload |
+| `04 72 <slot> <...> <chunk_count>` | `build_metadata_command(chunk_count, slot)` | **Metadata** — tells firmware how many chunks to expect |
+| `04 02` | `build_control_command(bytes([0x04, 0x02]))` | **Exit** — signals end of upload |
+
+**Critical discovery:** the official software sends each control command with `HidD_SetFeature`, then **immediately reads back the response** with `HidD_GetFeature`. The response contains the command echoed back plus status bytes.
+
+### Data Transfer (MI_02 via `WriteFile` / `ReadFile`)
+
+Image data is sent as **4097-byte output reports** (1 byte report_id + 4096 bytes payload) via `WriteFile` on MI_02.
+
+After **every chunk**, the official software reads a **65-byte input report** via `ReadFile` from MI_02. The response is always:
+
+```
+00 01 5a 02 00 00 00 00 ...
 ```
 
-If you don't see these, the keyboard may not be connected via USB-C, or the driver isn't loaded.
+This is an **ACK** from the firmware confirming chunk receipt.
 
-## Step 5: Upload test pattern to slot 1
+### Upload Sequence
+
+1. **Begin:** `HidD_SetFeature(MI_03, 04 18...)` → sleep 50ms → `HidD_GetFeature(MI_03)` → sleep 100ms
+2. **Metadata:** `HidD_SetFeature(MI_03, 04 72...)` → sleep 50ms → `HidD_GetFeature(MI_03)` → sleep 100ms
+3. **For each chunk:**
+   - `WriteFile(MI_02, 4097 bytes)` → sleep ~65ms
+   - `ReadFile(MI_02, 65 bytes)` ← ACK `00 01 5a 02...`
+4. **Exit:** `HidD_SetFeature(MI_03, 04 02...)`
+
+### Chunk Delay
+
+The official software uses approximately **65-70ms between chunks**. Too fast and the firmware drops data; too slow and upload takes unnecessarily long.
+
+## GIF Animation — Black Buffer Frame
+
+The AULA F75 firmware has an **initial loop glitch**: without a buffer frame, it locks onto the first frame and the animation never plays.
+
+**Solution:** prepend a single **black frame** with minimal delay (~2ms) before the actual GIF frames. This absorbs the firmware's initial loop glitch.
+
+```python
+from aula_hacky.tft_protocol import prepend_black_buffer
+stream = prepend_black_buffer(stream)
+```
+
+## Image Format
+
+- Resolution: **128×128**
+- Format: **RGB565 little-endian**
+- Header: 256 bytes (frame_count + per-frame delays)
+- Payload: padded to multiple of **4096 bytes**
+
+## Quick Start
+
+### Upload test pattern
 
 ```cmd
 python -m aula_hacky.windows_tft_upload --test-pattern --slot 1 --debug
 ```
 
-Watch the output. You should see:
-- `begin` command sent
-- `metadata` command sent
-- chunk progress 1/9, 2/9, etc.
-- `exit` command sent
-- "Upload completed" message
-
-## Step 6: Test different slots
-
-If slot 1 doesn't work (keyboard doesn't show the pattern), try slot 0:
+### Upload a GIF
 
 ```cmd
-python -m aula_hacky.windows_tft_upload --test-pattern --slot 0 --debug
+python -m aula_hacky.windows_tft_upload --image guts.gif --slot 1 --debug
 ```
 
-Try slots 0, 1, 2, 3, etc. The firmware may have remapped the dial to a different slot.
-
-## Step 7: Upload the official GIF
-
-If you have the official `0.gif` (128x128) or the generated `test.gif`:
+### Upload with custom options
 
 ```cmd
-python -m aula_hacky.screen_upload --image test.gif --slot 1 --debug
+python -m aula_hacky.windows_tft_upload --image my.gif --slot 1 --max-frames 50 --chunk-delay 0.15
 ```
 
-**Note:** `screen_upload.py` currently uses macOS IOKit. For Windows, use `windows_tft_upload.py` for test patterns, or we need to port `screen_upload.py` to use `windows_hid.py`.
+## Troubleshooting
 
-## If Upload Fails
+### "Upload failed: Cannot open HID device"
+- **Kill DeviceDriver.exe**: `Stop-Process -Name "DeviceDriver" -Force`
+- Reconnect USB-C cable
 
-1. **Disconnect and reconnect the USB-C cable** between attempts. The firmware can lock up after failed transactions.
-2. **Try the official software first** to confirm the keyboard accepts uploads at all.
-3. **Capture the official software traffic** using API Monitor or Frida (see below).
+### TFT shows "loading" or corrupted texture
+1. Unplug USB-C cable
+2. Wait 5 seconds
+3. Plug back in
+4. **Do not send `04 02` (exit) on incomplete streams** — that causes the "loading" state
 
-## API-Level Capture (Advanced)
+### Animation doesn't play (static image)
+- Make sure you're using a **true animated GIF** (not a static image saved as .gif)
+- The black buffer frame must be prepended (`prepend_black_buffer`)
+- Some firmware versions may require a specific dial mode to enable animation
 
-If our uploader fails but the official software works, we need to see exactly what buffers the official software sends.
+## Capture & Analysis
 
-### Option A: API Monitor (GUI)
-1. Download [API Monitor](http://www.rohitab.com/apimonitor) on Windows.
-2. Launch API Monitor as Administrator.
-3. Start monitoring `DeviceDriver.exe`.
-4. Filter API calls: `hid.dll!HidD_SetFeature`, `hid.dll!HidD_GetFeature`, `kernel32!WriteFile`.
-5. Click "Upload to keyboard" in the official software.
-6. Export the captured buffers.
+To capture official software traffic for further reverse engineering:
 
-### Option B: Frida Script (Command Line)
-1. Install Frida on Windows: `pip install frida-tools`
-2. Run the hook script:
-   ```cmd
-   python tools\frida_hid_hook.py
-   ```
-   (Script not yet created — ask Kimi if needed.)
+```powershell
+# List USBPcap devices
+& "C:\Program Files\Wireshark\dumpcap.exe" -D
 
-## Expected Buffer Sizes
+# Capture (run this, then click Upload in official software)
+& "C:\Program Files\Wireshark\tshark.exe" -i "\\.\USBPcap1" -w capture.pcapng
+```
 
-| Call | Size | Purpose |
-|------|------|---------|
-| `HidD_SetFeature` | 65 bytes | Control commands (begin, metadata, exit) |
-| `WriteFile` | 4097 bytes | Image data chunks (1 report ID + 4096 RGB565) |
+Analyze with:
 
-## Recovery from "Loading" State
+```cmd
+tshark -r capture.pcapng -Y "usb.transfer_type == 0x01" -T fields -e frame.number -e usb.endpoint_address.direction -e usb.endpoint_address.number -e usb.data_len
+```
 
-If the keyboard shows "loading" or a corrupted texture:
-1. Unplug USB-C cable.
-2. Wait 5 seconds.
-3. Plug USB-C cable back in.
-4. Try upload again.
+## Files
 
-**Do not send `04 02` (exit) on incomplete streams.** That causes the "loading" state.
+- `aula_hacky/windows_hid.py` — ctypes wrapper for Windows HID API
+- `aula_hacky/windows_tft_upload.py` — main upload script
+- `aula_hacky/tft_protocol.py` — protocol builders (frames, chunks, commands)

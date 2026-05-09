@@ -104,7 +104,8 @@ def _probe_hid_path(path: str):
             return None
         try:
             caps = HIDP_CAPS()
-            if HidP_GetCaps(preparsed, ctypes.byref(caps)) != 0:
+            status = HidP_GetCaps(preparsed, ctypes.byref(caps))
+            if status & 0x80000000:  # NTSTATUS failure (severity bit set)
                 return None
             return {
                 "path": path,
@@ -269,6 +270,17 @@ def hid_get_feature(handle, report_id: int, length: int) -> bytes:
     return bytes(buf.raw)
 
 
+def hid_set_output_report(handle, report_id: int, data: bytes) -> None:
+    """Send HID output report via HidD_SetOutputReport. Windows expects report_id prepended."""
+    buf = bytes([report_id]) + data
+    buf_size = len(buf)
+    c_buf = ctypes.create_string_buffer(buf, buf_size)
+    ok = HidD_SetOutputReport(handle, c_buf, buf_size)
+    if not ok:
+        err = ctypes.get_last_error()
+        raise OSError(f"HidD_SetOutputReport failed: {err}")
+
+
 def hid_write_output(handle, report_id: int, data: bytes) -> None:
     """Send HID output report via WriteFile. Windows expects report_id prepended."""
     buf = bytes([report_id]) + data
@@ -281,6 +293,20 @@ def hid_write_output(handle, report_id: int, data: bytes) -> None:
         raise OSError(f"WriteFile failed: {err}")
     if written.value != buf_size:
         raise OSError(f"WriteFile short write: {written.value}/{buf_size}")
+
+
+def hid_read_input(handle, report_id: int, length: int) -> bytes:
+    """Read HID input report via ReadFile. Windows expects report_id prepended."""
+    buf = ctypes.create_string_buffer(length)
+    buf.raw = bytes([report_id]) + bytes(length - 1)
+    read = wintypes.DWORD()
+    ok = read_file(handle, buf, length, ctypes.byref(read), None)
+    if not ok:
+        err = ctypes.get_last_error()
+        if err == 0x00000121:  # ERROR_SEM_TIMEOUT
+            raise TimeoutError(f"ReadFile timed out")
+        raise OSError(f"ReadFile failed: {err}")
+    return bytes(buf.raw[:read.value])
 
 
 if __name__ == "__main__":

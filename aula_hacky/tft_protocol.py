@@ -140,6 +140,21 @@ def load_image_stream(path: Path, max_frames: int, still_delay: int) -> ScreenSt
     return build_screen_stream(frames, delays)
 
 
+def prepend_black_buffer(stream: ScreenStream) -> ScreenStream:
+    """Prepend a single black frame with minimal delay to absorb firmware loop glitch."""
+    if stream.frame_count >= 255:
+        return stream
+    black_frame = bytes(SCREEN_FRAME_BYTES)
+    # Extract existing frames and delays from stream.data
+    frame_count = stream.data[0]
+    delays = list(stream.data[1:1 + frame_count])
+    frames = [
+        stream.data[SCREEN_HEADER_BYTES + i * SCREEN_FRAME_BYTES:SCREEN_HEADER_BYTES + (i + 1) * SCREEN_FRAME_BYTES]
+        for i in range(frame_count)
+    ]
+    return build_screen_stream([black_frame] + frames, [1] + delays)
+
+
 def build_metadata_command(chunk_count: int, slot: int = 1) -> bytes:
     if not 0 <= slot <= 255:
         raise ValueError(f"slot must be 0..255, got {slot}")

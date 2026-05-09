@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import time
 
+from pathlib import Path
+
 from aula_hacky.tft_protocol import (
     SCREEN_CHUNK_BYTES,
     SCREEN_CONTROL_USAGE,
@@ -16,10 +18,12 @@ from aula_hacky.tft_protocol import (
     build_metadata_command,
     build_test_pattern_stream,
     iter_chunks,
+    load_image_stream,
 )
 from aula_hacky.windows_hid import (
     enumerate_hid_devices,
     hid_get_feature,
+    hid_read_input,
     hid_set_feature,
     hid_write_output,
     open_hid_device,
@@ -44,7 +48,7 @@ def normalize_hid_path(value: str) -> str:
 def find_device_paths(vid: int, pid: int, usage_page: int, usage: int):
     for dev in enumerate_hid_devices():
         if dev["vid"] == vid and dev["pid"] == pid and dev["usage_page"] == usage_page and dev["usage"] == usage:
-            return dev["path"], dev["feature_report_bytes"], dev["output_report_bytes"]
+            return dev["path"], dev["feature_report_bytes"], dev["output_report_bytes"], dev["input_report_bytes"]
     raise RuntimeError(f"No device found for vid=0x{vid:04X} pid=0x{pid:04X} usage_page=0x{usage_page:04X} usage=0x{usage:04X}")
 
 
@@ -52,12 +56,12 @@ def windows_tft_upload(
     stream: ScreenStream,
     slot: int = 1,
     debug: bool = False,
-    chunk_delay: float = 0.04,
+    chunk_delay: float = 0.15,
     control_path: str | None = None,
     pipe_path: str | None = None,
 ) -> None:
     if control_path is None:
-        control_path, control_feature_size, _ = find_device_paths(
+        control_path, control_feature_size, _, _ = find_device_paths(
             WIRED_VID, WIRED_PID, SCREEN_CONTROL_USAGE_PAGE, SCREEN_CONTROL_USAGE
         )
     else:
@@ -65,16 +69,17 @@ def windows_tft_upload(
         control_feature_size = 65
 
     if pipe_path is None:
-        pipe_path, _, pipe_output_size = find_device_paths(
+        pipe_path, _, pipe_output_size, pipe_input_size = find_device_paths(
             WIRED_VID, WIRED_PID, SCREEN_PIPE_USAGE_PAGE, SCREEN_PIPE_USAGE
         )
     else:
         pipe_path = normalize_hid_path(pipe_path)
         pipe_output_size = SCREEN_CHUNK_BYTES + 1
+        pipe_input_size = 65
 
     if debug:
         print(f"control: {control_path} feature={control_feature_size}")
-        print(f"pipe: {pipe_path} output={pipe_output_size}")
+        print(f"pipe: {pipe_path} output={pipe_output_size} input={pipe_input_size}")
 
     control_handle = open_hid_device(control_path)
     pipe_handle = open_hid_device(pipe_path)
@@ -83,29 +88,44 @@ def windows_tft_upload(
         # 1. Begin command: 04 18 via feature report
         begin_payload = build_control_command(bytes([0x04, 0x18]))
         if debug:
-            print(f"begin: {begin_payload.hex()}")
+            print(f"begin set: {begin_payload.hex()}")
         hid_set_feature(control_handle, 0, begin_payload)
-        time.sleep(0.2)
-
-        # 1.5 Optional unlock: try 04 28 (SyncScreenTime select) before metadata
-        # Based on RoseWaveStudio, this is used during time sync but not upload.
-        # We include it as an optional probe step.
-        # hid_set_feature(control_handle, 0, build_control_command(bytes([0x04, 0x28, 0, 0, 0, 0, 0, 0, 0x01])))
-        # time.sleep(0.1)
+        time.sleep(0.05)
+        
+        # Read back response (official software does this)
+        resp = hid_get_feature(control_handle, 0, control_feature_size)
+        if debug:
+            print(f"begin get: {resp.hex()}")
+        time.sleep(0.1)
 
         # 2. Metadata command: 04 72 <slot> ... <chunk_count>
         meta_payload = build_metadata_command(stream.chunk_count, slot)
         if debug:
-            print(f"metadata: {meta_payload.hex()}")
+            print(f"metadata set: {meta_payload.hex()}")
         hid_set_feature(control_handle, 0, meta_payload)
         time.sleep(0.05)
+        
+        # Read back response (official software does this)
+        resp = hid_get_feature(control_handle, 0, control_feature_size)
+        if debug:
+            print(f"metadata get: {resp.hex()}")
+        time.sleep(0.1)
 
         # 3. Chunks via output reports on MI_02
-        # Windows output report size is 4097 (1 report ID + 4096 payload)
         for index, chunk in enumerate(iter_chunks(stream.data), start=1):
             if debug:
                 print(f"chunk {index}/{stream.chunk_count}")
             hid_write_output(pipe_handle, 0, chunk)
+            
+            # Read input report between chunks (official software does this)
+            try:
+                resp = hid_read_input(pipe_handle, 0, pipe_input_size)
+                if debug:
+                    print(f"  response: {resp.hex()}")
+            except TimeoutError:
+                if debug:
+                    print("  response: timeout (expected)")
+            
             time.sleep(chunk_delay)
 
         # 4. Exit command: 04 02
@@ -128,9 +148,12 @@ def windows_tft_upload(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Windows TFT upload diagnostic for AULA F75 Max")
     parser.add_argument("--test-pattern", action="store_true", help="upload test pattern")
+    parser.add_argument("--image", type=Path, help="path to GIF/image file to upload")
+    parser.add_argument("--max-frames", type=int, default=255, help="max frames from GIF (default 255)")
+    parser.add_argument("--still-delay", type=int, default=50, help="delay for still images (default 50)")
     parser.add_argument("--slot", type=int, default=1, help="screen slot (0..255)")
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--chunk-delay", type=float, default=0.04)
+    parser.add_argument("--chunk-delay", type=float, default=0.15)
     parser.add_argument(
         "--control-path",
         help="optional full HID path or HID\\VID_... instance id for control interface (MI_03 / FF13)",
@@ -144,7 +167,14 @@ def main() -> int:
     if args.slot < 0 or args.slot > 255:
         parser.error("--slot must be 0..255")
 
-    stream = build_test_pattern_stream(delay=10)
+    if args.image:
+        from aula_hacky.tft_protocol import load_image_stream, prepend_black_buffer
+        stream = load_image_stream(args.image, args.max_frames, args.still_delay)
+        # AULA F75 firmware has an initial loop glitch that locks onto the first frame.
+        # Adding a 1-frame black buffer with minimal delay absorbs this glitch.
+        stream = prepend_black_buffer(stream)
+    else:
+        stream = build_test_pattern_stream(delay=10)
     print(f"Stream: frames={stream.frame_count} chunks={stream.chunk_count} bytes={len(stream.data)}")
 
     try:
