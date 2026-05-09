@@ -204,7 +204,7 @@ python -m aula_hacky.windows_tft_upload --test-pattern --slot 1 --debug ^
 
 **Commits:** `887421c` (manual path support), `2053713` (diagnostic script update).
 
-### macOS Upload Blocker — RESOLVED (2026-05-08)
+### macOS Upload Blocker — PARTIALLY RESOLVED (2026-05-08)
 
 **Root cause:** macOS was sending HID reports **without** the report_id prefix byte, while Windows sends them **with** the report_id prefix.
 
@@ -217,7 +217,9 @@ python -m aula_hacky.windows_tft_upload --test-pattern --slot 1 --debug ^
 
 **Fix:** Changed `hid_macos.py` `write()` default to `prefix_report_id=True`, and `tft_service.py` `_send_control()` to use `prefix_report_id=True`. Now macOS sends 65-byte feature reports and 4097-byte output reports, matching Windows behavior.
 
-**Verification pending:** Hardware test on macOS with the corrected code.
+**Hardware test result (2026-05-08):** Upload command completes without errors (`begin → metadata → 9 chunks → exit`), but the dial screen does **not** change to show the uploaded pattern. It continues showing the GIF that was uploaded from the official Windows software.
+
+**Hypothesis:** The dial may be displaying a different slot than the one we're uploading to (slots 0, 1, 2, 3 tested). Or there may be an additional "activate slot" command needed.
 
 **Commits:** `43ab7e7` (macOS report_id fix), `36149be` (capture tools).
 
@@ -325,3 +327,73 @@ OK
 ```
 
 When adding protocol builders, add tests that reproduce exact captured packet bytes.
+
+## Pending Tasks (Next Session)
+
+### High Priority
+
+1. **TFT Slot/Dial Investigation**
+   - macOS uploads complete without error but dial screen does not change
+   - Windows uploads currently failing with `HidD_SetFeature failed: 0` (keyboard may be in blocked state)
+   - Need to determine: which slot is the dial currently displaying? (probably not 0-3)
+   - Need to determine: is there an "activate slot" command? (RoseWaveStudio `04 28` command only used in SyncScreenTime)
+   - Need to determine: does the dial have fixed positions (0, 1, 2, 3) or continuous scroll?
+   - File: `docs/captures/WINDOWS_SLOT_DIAL_REPORT.md` has Codex initial findings
+   - File: `tools/CODEX_QUESTIONS.md` has full investigation questions
+
+2. **Keyboard Recovery**
+   - Windows uploads failing — likely keyboard firmware in blocked state
+   - Try: disconnect USB-C cable, wait 10s, reconnect
+   - Try: power cycle keyboard (if battery powered)
+   - Once recovered, verify Windows uploads work again with manual paths
+
+### Medium Priority
+
+3. **macOS Upload Verification**
+   - Once slot/dial behavior is understood, test macOS upload to correct slot
+   - Verify test pattern or GIF appears on dial screen
+   - If successful, port `anim_upload.py` to use configurable frame count and delay
+
+4. **Windows Capture Tools**
+   - `tools/capture_windows.py` exists and works (when keyboard is responsive)
+   - Use it to capture official software traffic for slot switching, dial rotation
+   - Compare bytes with `tools/compare_buffers.py`
+
+### Low Priority
+
+5. **RGB/Protocol Phase 5**
+   - RGB packet builders already in `protocol_core.py` (from public reverse engineering)
+   - Need hardware-verified captures before implementing UI
+   - Wait until TFT protocol is stable
+
+## Current Status Summary
+
+| Feature | macOS | Windows | Linux |
+|---------|-------|---------|-------|
+| RTC Dongle | ✅ Verified | — | ✅ Verified |
+| RTC Cable | ✅ Verified | — | ✅ Verified |
+| TFT Upload (command) | ✅ Works | ✅ Works* | — |
+| TFT Upload (visible) | ❌ No | ❌ No** | — |
+| RGB | Not started | Not started | Not started |
+| Macros/Remap | Not started | Not started | Not started |
+
+*Windows requires manual `--control-path` and `--pipe-path` flags.
+**Both platforms complete HID commands but dial still shows GIF from official software. Root cause: unknown slot behavior or missing activate command.
+
+## Files Modified This Session
+
+- `aula_hacky/hid_macos.py` — `write()` defaults to `prefix_report_id=True`
+- `aula_hacky/tft_service.py` — `_send_control()` uses `prefix_report_id=True`
+- `aula_hacky/windows_hid.py` — PowerShell fallback enumeration + manual path support
+- `aula_hacky/windows_tft_upload.py` — `--control-path` and `--pipe-path` CLI args
+- `tools/byte_logger.py` — JSONL buffer logger (new)
+- `tools/capture_windows.py` — Windows buffer capture (new)
+- `tools/capture_macos.py` — macOS buffer capture (new)
+- `tools/compare_buffers.py` — Cross-platform diff (new)
+- `tools/windows_diagnostic.py` — Automated slot testing + bridge client
+- `tools/test_connectivity.py` — Network diagnostics
+- `tools/debug_hid_windows.py` — PowerShell HID enumeration debug
+- `tools/CODEX_QUESTIONS.md` — Questions for Windows investigation
+- `docs/captures/WINDOWS_SLOT_DIAL_REPORT.md` — Codex findings
+- `docs/WINDOWS_UPLOAD.md` — Windows step-by-step guide
+- `AGENTS.md` — This file
