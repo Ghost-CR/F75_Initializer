@@ -1,2 +1,28 @@
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+
+# Temporary investigation scripts
+_*.py
+_*.ps1
+__handlers__/
+
+# Temporary logs and diagnostics
+*.log
+diagnostico.txt
+frida_hid_log.txt
+frida_trace_err.txt
+frida_trace_out.txt
+
+# Test captures (keep official captures in docs/captures/)
+test_USBPcap*.pcapng
+official_upload_reports.bin
+
+# Environment
+.env
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
