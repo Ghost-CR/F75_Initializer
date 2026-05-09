@@ -6,6 +6,8 @@ This file is local project memory for AI agents. Read it before changing code or
 
 Build toward a native macOS software stack for the AULA F75 Max keyboard that can eventually control all available features: RTC/TFT initialization, Mac adaptation, RGB, macros, remapping, profiles, and TFT image/GIF management.
 
+**Windows Status (2026-05-08):** TFT GIF upload is fully reverse-engineered and working. The protocol uses `HidD_SetFeature`/`HidD_GetFeature` on MI_03 for control commands and `WriteFile`/`ReadFile` on MI_02 for image chunks. The official software sends 105 frames of `guts.gif` to slot 2 with per-frame delays `[15,20,15,15,20...]`. The critical fix was using `image.seek()` instead of `ImageSequence.Iterator` to read correct frame delays. See `docs/WINDOWS_UPLOAD.md` for full protocol documentation.
+
 The current repository is not a full keyboard control app. It is a proof and implementation of the proprietary HID RTC/display initialization path for Linux and the macOS 2.4 GHz dongle.
 
 Phase 1 is complete: protocol builders and validators are centralized in the platform-neutral `aula_hacky/protocol_core.py` module. Linux and tests import that module directly; `aula_hacky/protocol.py` remains a compatibility re-export.

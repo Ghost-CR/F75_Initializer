@@ -100,21 +100,22 @@ def build_test_pattern_stream(delay: int = 17) -> ScreenStream:
 
 def load_image_stream(path: Path, max_frames: int, still_delay: int) -> ScreenStream:
     try:
-        from PIL import Image, ImageSequence
+        from PIL import Image
     except ImportError as exc:
         raise RuntimeError(
             "image/GIF upload needs Pillow installed; use --test-pattern to validate transport without it"
         ) from exc
 
     image = Image.open(path)
-    source_frames = list(ImageSequence.Iterator(image))
-    if not source_frames:
+    n_frames = getattr(image, "n_frames", 1)
+    if n_frames == 0:
         raise ValueError(f"{path} does not contain image frames")
 
     frames: list[bytes] = []
     delays: list[int] = []
-    for source in source_frames[:max_frames]:
-        rendered = source.convert("RGBA")
+    for frame_index in range(min(n_frames, max_frames)):
+        image.seek(frame_index)
+        rendered = image.convert("RGBA")
         rendered.thumbnail((SCREEN_WIDTH, SCREEN_HEIGHT))
         canvas = Image.new("RGBA", (SCREEN_WIDTH, SCREEN_HEIGHT), (0, 0, 0, 255))
         x = (SCREEN_WIDTH - rendered.width) // 2
@@ -129,7 +130,7 @@ def load_image_stream(path: Path, max_frames: int, still_delay: int) -> ScreenSt
                 write_rgb565_le(frame, ((py * SCREEN_WIDTH) + px) * 2, r, g, b)
         frames.append(bytes(frame))
 
-        duration_ms = source.info.get("duration")
+        duration_ms = image.info.get("duration")
         if duration_ms is None:
             delays.append(still_delay)
         else:

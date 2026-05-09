@@ -151,6 +151,7 @@ def main() -> int:
     parser.add_argument("--image", type=Path, help="path to GIF/image file to upload")
     parser.add_argument("--max-frames", type=int, default=255, help="max frames from GIF (default 255)")
     parser.add_argument("--still-delay", type=int, default=50, help="delay for still images (default 50)")
+    parser.add_argument("--buffer", action="store_true", help="prepend black buffer frame (may break animation)")
     parser.add_argument("--slot", type=int, default=1, help="screen slot (0..255)")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--chunk-delay", type=float, default=0.15)
@@ -170,9 +171,10 @@ def main() -> int:
     if args.image:
         from aula_hacky.tft_protocol import load_image_stream, prepend_black_buffer
         stream = load_image_stream(args.image, args.max_frames, args.still_delay)
-        # AULA F75 firmware has an initial loop glitch that locks onto the first frame.
-        # Adding a 1-frame black buffer with minimal delay absorbs this glitch.
-        stream = prepend_black_buffer(stream)
+        # NOTE: Black buffer was tried but may prevent animation on some firmwares.
+        # Only prepend if explicitly needed.
+        if args.buffer:
+            stream = prepend_black_buffer(stream)
     else:
         stream = build_test_pattern_stream(delay=10)
     print(f"Stream: frames={stream.frame_count} chunks={stream.chunk_count} bytes={len(stream.data)}")
