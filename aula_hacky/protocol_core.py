@@ -353,9 +353,9 @@ def build_cable_rgb_transaction_sequence(
     payload = bytearray(CABLE_PACKET_SIZE)
     payload[0] = mode
     if mode != 0:
-        payload[1] = color & 0xFF
+        payload[1] = (color >> 16) & 0xFF
         payload[2] = (color >> 8) & 0xFF
-        payload[3] = (color >> 16) & 0xFF
+        payload[3] = color & 0xFF
         payload[8] = colorful
         payload[9] = brightness
         payload[10] = speed
